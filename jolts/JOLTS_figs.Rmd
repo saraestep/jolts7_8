@@ -1,0 +1,276 @@
+---
+title: "JOLTS_laborblog"
+output:
+  pdf_document: default
+---
+
+```{r setup, echo=FALSE,}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r pull, echo=FALSE, warning=FALSE}
+knitr::opts_knit$set(root.dir = "C:/Users/sestep/Documents/jolts/")
+#setwd("C:/Users/sestep/Documents/jolts/")
+library(librarian)
+librarian::shelf(MASS,ggrepel,tidyverse, janitor, knitr, ggpmisc, mFilter, plm, gridExtra)
+JOLTS_Rates <- read.csv("C:/Users/sestep/Documents/jolts/data/JOLTS_Rates.csv")
+JOLTS_Levels<-read.csv("C:/Users/sestep/Documents/jolts/data/JOLTS_levels.csv")
+#devtools::install_github("mibarnes/ggTHP")
+library(ggTHP)
+JOLTS_Rates<-JOLTS_Rates %>% clean_names()
+JOLTS_Levels<-JOLTS_Levels%>%clean_names()
+```
+
+```{r setting up recessions, include=FALSE, warning=FALSE}
+industy_openings<-JOLTS_Rates%>%select(date, value, dataelement_text, dataelement_code, industry_code, industry_text, series, group)%>% filter(dataelement_code=="JO", group!="Sizes")%>%
+  ## MONTHLY RECESSIONS ###
+  mutate(recession = ifelse(
+          date >= "2001-03-01" & date <= "2007-11-01", "2001", ifelse(
+            date >= "2007-12-01" & date <= "2020-01-01", "2007-09", ifelse(
+              date >= "2020-02-01", "2020-21", "OTHER"))))
+
+RAINBOW_Recovery <- industy_openings %>%
+  filter(recession != "OTHER") %>%
+  group_by(recession, series) %>%
+  arrange(date) %>%
+  mutate(pct_chg = value / first(value)-1) %>%
+  #filter(pct_chg <= 0) %>%
+  mutate(Time = 1:n())
+
+
+```
+
+```{r setting up rainbows, include=TRUE,warning=FALSE}
+setwd("C:/Users/sestep/Documents/jolts/")
+RAINBOW_Recovery_mids <- RAINBOW_Recovery %>% filter(Time < 80) %>% group_by(recession, series) %>% filter(Time == mean(Time))
+
+plot.RAINBOW <- RAINBOW_Recovery %>%
+   
+  #filter(pct_chg <= 0) %>%
+  ggplot() +
+  geom_line(aes(x = Time, y = pct_chg, group = recession, color = recession), size = 1.2) +
+  labs(title = "Recoveries by Business Cycle") +
+  scale_x_continuous("Months since pre-recession peak", limits = c(0,150)) +
+  # scale_y_continuous("Percent change from peak", limits = c(-.12,0.30),  breaks = seq(-0.12,0.30, 0.06), expand = c(0,0),
+  #                    labels = percent_format(accuracy = 4L)) +
+
+  theme_brookings() + scale_color_brookings("THP_Categorical_2") +
+
+  guides(fill=guide_legend(title="")) +
+  theme(legend.position = "none",
+        plot.margin = unit(c(1,1,1.5,1), "cm"))+
+  geom_label_repel(aes(x= Time, y = pct_chg, group = recession, label = recession, color = recession),
+                   data = subset(RAINBOW_Recovery_mids, series=="Construction")  ,
+                   size = 4, hjust=0, vjust=0,
+                   alpha = 1, segment.alpha = 0,
+                   na.rm=TRUE,show.legend = FALSE,seed = 1234)+facet_wrap(vars(series))
+
+ggsave("Rainbow_rates.png", dpi=300, height=15, width=18, units="in", bg = "white")
+
+```
+
+
+
+```{r create projection data, include=FALSE, warning=FALSE}
+
+rainbow_recovery <- RAINBOW_Recovery %>% 
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))
+
+rainbow_2008 <- rainbow_recovery %>% 
+  filter(date >= as.Date("2005-11-01","%Y-%m-%d"),
+         date <= as.Date("2007-11-01","%Y-%m-%d"))
+##the model might be throwing it.
+rainbow_model_2008 <- lm(value ~ date*series + series, data = rainbow_2008)
+summary(rainbow_model_2008)
+
+new_rainbow_2008 <- rainbow_recovery %>% 
+  filter(date >= as.Date("2007-11-01","%Y-%m-%d")) 
+
+# Finally got the data to make the models work 
+final_rainbow_2008 <- predict(rainbow_model_2008, new_rainbow_2008) %>% 
+  tibble(trend = .) %>% 
+  cbind(new_rainbow_2008, .)
+##doing for 2020
+rainbow_recovery <- RAINBOW_Recovery %>% 
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))
+
+rainbow_2020 <- rainbow_recovery %>% 
+  filter(date >= as.Date("2018-02-01","%Y-%m-%d"),
+         date <= as.Date("2020-02-01","%Y-%m-%d"))
+rainbow_10_2020<-rainbow_recovery %>% 
+  filter(date >= as.Date("2010-02-01","%Y-%m-%d"),
+         date <= as.Date("2020-02-01","%Y-%m-%d"))
+
+rainbow_model_2020 <- lm(value ~ date:series + series, data = rainbow_2020)
+rainbow_model_10_2020 <- lm(value ~ date:series + series, data = rainbow_10_2020)
+
+new_rainbow_2020 <- rainbow_recovery %>% 
+  filter(date >= as.Date("2020-02-01","%Y-%m-%d")) 
+
+# Finally got the data to make the models work 
+final_rainbow_2020 <- predict(rainbow_model_2020, new_rainbow_2020) %>% 
+  tibble(trend = .) %>% 
+  cbind(new_rainbow_2020, .)
+
+final_rainbow_10_2020<-predict(rainbow_model_10_2020,new_rainbow_2020) %>% 
+  tibble(trend2 = .)
+final_10_2_2020<-cbind(final_rainbow_2020, final_rainbow_10_2020)
+```
+
+
+```{r create final projections, include=FALSE, warning=FALSE}
+setwd("C:/Users/sestep/Documents/jolts/")
+
+plot_08<-ggplot(final_rainbow_2008, aes(x = date, y = value)) +
+  labs(title = "Great Recession") +
+  geom_line(color = 'black', size = 1) +
+  facet_wrap(vars(series),scales = "fixed") + 
+  geom_line(aes(y = trend), color = "red") + 
+   stat_smooth(method = "lm", fullrange = T, formula = y ~ x, size = 0.5, se = FALSE,
+              color = "green", fill = "green", alpha = 0.2)+
+  scale_x_date(date_labels = "%Y", date_breaks = "2 year", limits=c(as.Date("2007-12-01"),as.Date("2015-11-01"))) +
+  labs(x = "Time (Years)", y = "openings rate vs. trend (percent)") +
+  theme_brookings() + 
+  scale_color_brookings("THP_Categorical_2")
+ggsave("GR_trend.png", dpi=300, height=15, width=18, units="in", bg = "white")
+
+
+plot_20<-ggplot(final_10_2_2020, aes(x = date, y = value)) +
+  labs(title = "COVID Recession") +
+  geom_line(color = 'black', size = 1) +
+  facet_wrap(vars(series),scales = "fixed") + 
+  stat_smooth(method = "lm", fullrange = T, formula = y ~ x, size = 0.5, se = FALSE,
+              color = "green", fill = "green", alpha = 0.2)+
+  geom_line(aes(y = trend), color = "red") + geom_line(aes(y=trend2), color="darkblue")+
+ scale_x_date(date_labels = "%Y-%m", date_breaks = "6 month", limits=c(as.Date("2020-03-01"),as.Date("2022-05-01"))) +
+  labs(x = "Time (Years)", y = "openings rate vs. trend (percent)") +
+ theme_brookings() + scale_color_brookings("THP_Categorical_2")
+ggsave("COVID_trend.png", dpi=300, height=15, width=18, units="in", bg = "white")
+
+##want to create a wrap of the job openings to hires
+openings_hires<-JOLTS_Rates%>%filter(dataelement_code=="JO"|dataelement_code=="HI")%>%filter(sizeclass_code==0)
+openings_hires<-openings_hires%>%mutate(date=as.Date(date))%>%select(date,value,dataelement_code, series)
+#openings_hires<-openings_hires%>%spread(dataelement_code,value)%>%mutate(ratio=JO/HI)
+p_openinghires<-ggplot(openings_hires, aes(x=date, y=value))+geom_line(aes(color=dataelement_code))+ labs(title = "openings to hires") +
+  facet_wrap(vars(series),scales = "free") + 
+  theme_brookings() + scale_color_brookings("THP_Categorical_2")
+ggsave("openhire.png", dpi=300, height=15, width=18, units="in", bg = "white")
+###now doing ratio
+openings_hires<-JOLTS_Rates%>%filter(dataelement_code=="JO"|dataelement_code=="HI")%>%filter(sizeclass_code==0)
+openings_hires<-openings_hires%>%mutate(date=as.Date(date))%>%select(date,value,dataelement_code, series)
+openings_hires<-openings_hires%>%spread(dataelement_code,value)%>%mutate(ratio=JO/HI)
+p_openinghires<-ggplot(openings_hires, aes(x=date, y=ratio))+geom_line()+ labs(x="",y="Job openings to hires ratio",title = "High Need Industries Over Time", caption = "When the ratio is above 1 (in red) the openings rate exceeds the hires rate and the industry is considered high need.")+facet_wrap(vars(series),scales = "fixed") + 
+  theme_brookings() + scale_color_brookings("THP_Categorical_2")+  annotate("rect", fill = "red", alpha = 0.5, 
+        xmin = as.Date("2000-01-01"), xmax = as.Date("2022-05-01"),
+        ymin = 1, ymax = Inf)
+ggsave("openhireratio.png", dpi=300, height=15, width=18, units="in", bg = "white")
+
+#now taking the ratio and adding a 2015-2020 trend line
+
+openings_hires <- openings_hires %>% 
+  mutate(date = as.Date(date, format = "%Y-%m-%d"))
+
+openings_hires15_20 <- openings_hires %>% 
+  filter(date >= as.Date("2015-01-01","%Y-%m-%d"),
+         date <= as.Date("2020-02-01","%Y-%m-%d"))
+##the model might be throwing it.
+openings_hires15_20 <- lm(ratio ~ date*series + series, data = openings_hires15_20)
+summary(openings_hires15_20)
+
+new_openings_hires15_20 <- openings_hires %>% 
+  filter(date >= as.Date("2000-01-01","%Y-%m-%d")) 
+
+# Finally got the data to make the models work 
+final_openingshires <- predict(openings_hires15_20, new_openings_hires15_20) %>% 
+  tibble(trend = .) %>% 
+  cbind(new_openings_hires15_20, .)
+final_openingshires<-final_openingshires%>%mutate(newtrend=ifelse(date> as.Date("2015-01-01"), trend ,NA))
+ 
+p2_openinghires<-ggplot(final_openingshires, aes(x=date))+annotate("rect", fill = "grey88", alpha = 0.5, 
+        xmin = as.Date("2000-01-01"), xmax = as.Date("2022-05-01"),
+        ymin = 1, ymax = Inf)+
+  geom_line(aes(y=ratio),color="black")+
+  geom_line(aes(y=newtrend), color="red", linetype="twodash")+
+  labs(x="",y="Job openings to hires ratio",title = "High Need Industries Over Time", caption = "When the ratio is above 1 (in grey) the openings rate exceeds the hires rate and the industry is considered high need.")+
+  facet_wrap(vars(series),scales = "fixed") + ylim(0,3)+
+  theme_brookings() + scale_color_brookings("THP_Categorical_2")  
+ggsave("openhireratiotrend.png", dpi=300, height=15, width=18, units="in", bg = "white")
+```
+```{r, echo=TRUE,warning=FALSE}
+#setwd("C:/Users/sestep/Documents/jolts/")
+plot_08
+plot_20
+plot.RAINBOW
+
+```
+
+```{r}
+setwd("C:/Users/sestep/Documents/jolts/")
+allrate<-JOLTS_Rates%>% mutate(date = as.Date(date, format = "%Y-%m-%d"))%>%filter(sizeclass_code==0)
+all_rates<-ggplot(allrate, aes(x=date, y=value))+geom_line(aes(color=dataelement_text))+facet_wrap(vars(industry_text),scales="free")+labs(title="all rates",x="",y="rate")
+ggsave("allrate.png", dpi=300, height=15, width=18, units="in", bg = "white")
+separations<-JOLTS_Rates%>% mutate(date = as.Date(date, format = "%Y-%m-%d"))%>%filter(sizeclass_code==0)%>%filter( dataelement_text=="Layoffs"|dataelement_text=="Other separations"|dataelement_text=="Quits")
+separationtypes<-ggplot(separations, aes(x=date, y=value))+geom_line(aes(color=dataelement_text))+facet_wrap(vars(industry_text),scales="free")+labs(title="separation rates",x="",y="rate")
+ggsave("separationscat.png", dpi=300, height=15, width=18, units="in", bg = "white")
+
+quits<-JOLTS_Rates%>% mutate(date = as.Date(date, format = "%Y-%m-%d"))%>%filter(sizeclass_code==0)%>%filter(dataelement_text=="Quits")
+quits15_20 <- quits %>% 
+  filter(date >= as.Date("2015-01-01","%Y-%m-%d"),
+         date <= as.Date("2020-02-01","%Y-%m-%d"))
+quits15_20 <- lm(value ~ date*series + series, data = quits15_20)
+#summary(quits15_20)
+new_quits15_20 <- quits %>% 
+  filter(date >= as.Date("2000-01-01","%Y-%m-%d")) 
+
+
+final_quits <- predict(quits15_20, new_quits15_20) %>% 
+  tibble(trend = .) %>% 
+  cbind(new_quits15_20, .)
+final_quits<-final_quits%>%mutate(newtrend=ifelse(date> as.Date("2015-01-01"), trend ,NA))
+quits_trend<-ggplot(final_quits, aes(x=date))+geom_line(aes(y=value), color="black")+geom_line(aes(y=newtrend), color="red")+facet_wrap(vars(industry_text),scales="fixed")+labs(title="quits trend",x="",y="rate")
+ggsave("quitstrend.png", dpi=300, height=15, width=18, units="in", bg = "white")
+```
+
+
+```{r}
+
+##MITCHELL YOU DON"T NEED TO CHECK BELOW THIS WE PROBABLY AREN'T GOING TO USE IT AND I HAVEN'T FINISHED WITH IT YET ANYWAY.
+library(tsm)
+library(mFilter)
+
+#I'm trying to cycle through the list of variables, but I think I might have to include the data frame and var
+# varlist<-c("s_q$accommodation_and_food_services")
+#            # ,"arts_entertainment_and_recreation","construction", "durables_manufacturing", "educational_services", "financial_activities","government", "health_care_and_social_assistance", "information", "leisure_and_hospitality", "mining_and_logging", "nondurables_manufacturing", "other_services", "professional_and_business_services","retail_trade,transportation_warehousing_and_utilities", "wholesale_trade")
+# lapply (varlist,function(x){
+
+
+#JUST DOING LEISURE FIRST
+dat <- s_q$leisure_and_hospitality
+ dat.tmp <- na.omit(dat)
+quits <- ts(dat.tmp, start = c(2001, 1), frequency = 12)
+df_quits<-data.frame(quits)
+
+hp.decom <- hpfilter(quits, freq = 129600, type = "lambda") #monthly frequency 14400 to start because of Hodrick Prescott (1997), then use 129600 because of Ravn and Uhlig (2002), next will try an alternative suggested by hamilton (2018)
+df_hpcyc<-as.data.frame(hp.decom[[1]])
+df_hptrend<-as.data.frame(hp.decom[[2]])
+hpcyc<-df_hpcyc%>%mutate(date = seq(as.Date('2001-01-01') , as.Date('2022-05-01'), "month"))
+hptrend<- df_hptrend%>%mutate(quits = df_quits$quits, date = seq(as.Date('2001-01-01') , as.Date('2022-05-01'), "month"))
+hptrend<-hptrend%>%rename(hptrend=V1)
+hpcyc<-hpcyc%>%rename(hpcyc=x)
+
+
+
+plottrend<-
+ ggplot(hptrend,aes(x=date)) +
+ geom_line(aes(y = hptrend), color="red")+
+   geom_line(aes(y = quits))+labs(x="",y="quits vs. HP trend")  
+plotcyc<-ggplot(hpcyc, aes(x=date,y=hpcyc))+geom_line()+labs(x="",y="HP cycle")
+
+grid.arrange(plottrend, plotcyc, ncol=2)
+
+
+#})
+
+
+```
+
